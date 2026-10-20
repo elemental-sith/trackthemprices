@@ -103,9 +103,12 @@ def main():
     base = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1"
     key = os.environ["SUPABASE_SERVICE_KEY"]
     api = {"apikey": key, "Authorization": "Bearer " + key, "Content-Type": "application/json"}
-    r = requests.get(base + "/products?select=id,url", headers=api, timeout=30)
+    r = requests.get(base + "/products?select=id,url,prices(count)", headers=api, timeout=30)
     r.raise_for_status()
-    for p in r.json():
+    products = r.json()
+    if os.environ.get("ONLY_NEW") == "true":  # quick run: only items with no price yet
+        products = [p for p in products if p["prices"][0]["count"] == 0]
+    for p in products:
         patch = base + "/products?id=eq." + p["id"]
         try:
             info = scrape(p["url"])
