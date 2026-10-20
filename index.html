@@ -116,7 +116,7 @@ $("login").onsubmit = async e => {
   e.preventDefault();
   const f = new FormData(e.target);
   const { error } = await sb.auth.signInWithPassword({ email: f.get("email"), password: f.get("password") });
-  $("lmsg").textContent = error ? "Wrong email or password." : "";
+  $("lmsg").textContent = error ? error.message : "";
 };
 $("add").onsubmit = async e => {
   e.preventDefault();
