@@ -2,7 +2,15 @@ name: Check prices
 on:
   schedule:
     - cron: "0 6,18 * * *"   # twice a day, 06:00 and 18:00 UTC
-  workflow_dispatch:          # lets you press a "Run" button manually
+  workflow_dispatch:          # manual "Run workflow" button, and the website's instant check
+    inputs:
+      only_new:
+        description: "Only check items that have no price yet"
+        type: boolean
+        default: false
+concurrency:
+  group: price-check
+  cancel-in-progress: false
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -16,3 +24,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ONLY_NEW: ${{ inputs.only_new }}
