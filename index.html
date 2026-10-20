@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Price Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --fg:#1a1d21; --mute:#6b7280; --line:#e5e7eb; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --card:#1b1e24; --fg:#e8eaed; --mute:#9aa0a6; --line:#2c3038; --accent:#60a5fa; } }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:1000px; margin:auto; padding:20px; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+  h1 { margin:0; font-size:1.4rem; }
+  input, button { font:inherit; padding:8px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); }
+  button { cursor:pointer; } button.on, button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  form { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; } form input[name=url] { flex:3; min-width:220px; } form input[name=name] { flex:1; min-width:140px; }
+  #login { max-width:320px; margin:80px auto; display:grid; gap:10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .top { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .name a { color:inherit; text-decoration:none; font-weight:600; } .store, .wait { color:var(--mute); font-size:.85rem; }
+  .price { font-size:1.4rem; font-weight:700; text-align:right; } .delta { font-size:.85rem; text-align:right; }
+  .down { color:#16a34a; } .up { color:#dc2626; } .flat { color:var(--mute); }
+  .err { color:#dc2626; font-size:.85rem; margin-top:6px; } .box { position:relative; height:220px; margin-top:12px; }
+  .del { font-size:.8rem; padding:4px 8px; margin-top:8px; } #msg { color:#dc2626; min-height:1.2em; }
+</style>
+</head>
+<body>
+<form id="login" hidden>
+  <h1>Price Tracker</h1>
+  <input name="email" type="email" placeholder="Email" required>
+  <input name="password" type="password" placeholder="Password" required>
+  <button class="primary">Log in</button>
+  <div id="lmsg" style="color:#dc2626"></div>
+</form>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <h1>Price Tracker</h1>
+    <div><span id="ranges"></span> <button id="out">Log out</button></div>
+  </header>
+  <form id="add">
+    <input name="url" type="url" placeholder="Paste a product link" required>
+    <input name="name" placeholder="Own name (optional)">
+    <button class="primary">Add</button>
+  </form>
+  <div id="msg"></div>
+  <div id="list"></div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://oqhgcezgsagnrtpbapzb.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "sb_publishable_Dv3sK0bjOv8Shorc85oZIw_9l0Nvyh9";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const money = (p, cur) => { try { return new Intl.NumberFormat(undefined,{style:"currency",currency:cur}).format(p); } catch { return p.toFixed(2) + " " + (cur||""); } };
+const RANGES = [["7 days",7],["30 days",30],["90 days",90],["All",0]];
+let days = 30, charts = [];
+
+function drawRanges() {
+  $("ranges").innerHTML = "";
+  RANGES.forEach(([label, d]) => {
+    const b = document.createElement("button");
+    b.textContent = label; b.className = d === days ? "on" : "";
+    b.onclick = () => { days = d; drawRanges(); load(); };
+    $("ranges").appendChild(b);
+  });
+}
+
+async function load() {
+  charts.forEach(c => c.destroy()); charts = [];
+  const { data: tr, error } = await sb.from("tracked")
+    .select("custom_name, products(id,url,name,store,currency,last_error)");
+  if (error) { $("list").innerHTML = "<p>" + esc(error.message) + "</p>"; return; }
+  if (!tr.length) { $("list").innerHTML = "<p class='wait'>Nothing tracked yet. Paste a link above.</p>"; return; }
+  const since = days ? new Date(Date.now() - days*864e5).toISOString() : null;
+  const items = await Promise.all(tr.map(async t => {
+    let q = sb.from("prices").select("price,checked_at").eq("product_id", t.products.id).order("checked_at");
+    if (since) q = q.gte("checked_at", since);
+    const { data } = await q.range(0, 999);
+    return { ...t.products, label: t.custom_name || t.products.name || t.products.url, history: data || [] };
+  }));
+  $("list").innerHTML = "";
+  items.forEach(it => {
+    const h = it.history, last = h[h.length-1], first = h[0];
+    let delta = "";
+    if (h.length > 1) {
+      const d = last.price - first.price, pct = first.price ? d/first.price*100 : 0;
+      delta = `<div class="delta ${d<0?"down":d>0?"up":"flat"}">${d>0?"+":""}${d.toFixed(2)} (${pct.toFixed(1)}%)</div>`;
+    }
+    const card = document.createElement("div"); card.className = "card";
+    card.innerHTML = `<div class="top">
+      <div><div class="name"><a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.label)}</a></div>
+      <div class="store">${esc(it.store)}</div></div>
+      <div>${last ? `<div class="price">${money(last.price, it.currency)}</div>${delta}` : `<div class="wait">Waiting for first check</div>`}</div></div>
+      ${it.last_error ? `<div class="err">Last check failed: ${esc(it.last_error)}</div>` : ""}
+      ${h.length ? `<div class="box"><canvas></canvas></div>` : ""}
+      <button class="del">Stop tracking</button>`;
+    card.querySelector(".del").onclick = async () => {
+      if (confirm("Stop tracking this item?")) { await sb.from("tracked").delete().eq("product_id", it.id); load(); }
+    };
+    $("list").appendChild(card);
+    if (h.length) charts.push(new Chart(card.querySelector("canvas"), {
+      type: "line",
+      data: { labels: h.map(x => new Date(x.checked_at).toLocaleString([], {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})),
+              datasets: [{ data: h.map(x => Number(x.price)), borderColor: "#2563eb", backgroundColor: "#2563eb22", fill: true, tension: .25, pointRadius: 2 }] },
+      options: { maintainAspectRatio: false, plugins: { legend: { display: false } } }
+    }));
+  });
+}
+
+$("login").onsubmit = async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const { error } = await sb.auth.signInWithPassword({ email: f.get("email"), password: f.get("password") });
+  $("lmsg").textContent = error ? "Wrong email or password." : "";
+};
+$("add").onsubmit = async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const { error } = await sb.rpc("add_product", { p_url: f.get("url"), p_name: f.get("name") });
+  $("msg").textContent = error ? error.message : "";
+  if (!error) { e.target.reset(); load(); }
+};
+$("out").onclick = () => sb.auth.signOut();
+
+function show(session) {
+  $("login").hidden = !!session; $("app").hidden = !session;
+  if (session) { drawRanges(); load(); }
+}
+sb.auth.onAuthStateChange((_e, session) => show(session));
+sb.auth.getSession().then(({ data }) => show(data.session));
+</script>
+</body>
+</html>
